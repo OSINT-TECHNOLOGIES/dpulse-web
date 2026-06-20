@@ -56,7 +56,6 @@ def compute_dork_mark(mode: str) -> str:
 
 
 def load_report_html() -> str:
-    """Reads report.html from the same directory as the script."""
     template_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "report.html"
     )
@@ -67,7 +66,6 @@ def load_report_html() -> str:
 
 
 def simulate_scan(cfg: ScanConfig) -> dict:
-    """Stub backend. Replace with a real call to data_processing.data_gathering()"""
     time.sleep(2.5)
     html_content = load_report_html()
     return {
@@ -82,18 +80,11 @@ def simulate_scan(cfg: ScanConfig) -> dict:
 
 
 def apply_theme():
-    """
-    Minimal CSS that inherits the active Streamlit theme.
-    No hardcoded colors — works with both light and dark modes.
-    The iframe for the report stretches to fill the viewport.
-    """
     st.markdown(
         """
         <style>
             /* ===== Tabs ===== */
-            .stTabs [data-baseweb="tab-list"] {
-                gap: 8px;
-            }
+            .stTabs [data-baseweb="tab-list"] { gap: 8px; }
             .stTabs [data-baseweb="tab"] {
                 height: 48px;
                 border-radius: 8px;
@@ -121,18 +112,13 @@ def apply_theme():
                 padding: 1rem;
             }
 
-            /* ===== Expander ===== */
-            .stExpander {
-                border-radius: 8px;
-            }
-
             /* ===== Form — remove border ===== */
             [data-testid="stForm"] {
                 border: none !important;
                 padding: 0 !important;
             }
 
-            /* ===== Make the report iframe large ===== */
+            /* ===== Report iframe ===== */
             .report-frame iframe {
                 width: 100% !important;
                 min-height: 80vh !important;
@@ -173,106 +159,168 @@ def render_sidebar():
 
 def render_scan_form():
     st.header("🚀 New Scan Configuration", divider="gray")
-    st.caption("Configure target, dorking strategy, APIs and snapshots. All data stays in session.")
+    st.caption("Configure all scan parameters below, then hit Start Scan.")
 
-    dork_options = ["None", "Basic", "IoT", "Files", "Admins", "Web", "Custom"]
-    dork_values = ["n", "basic", "iot", "files", "admins", "web", "custom"]
+
+    st.subheader("🎯 Target Information")
+
+    col_domain, col_comment = st.columns(2)
+    with col_domain:
+        domain = st.text_input(
+            "Domain",
+            value=st.session_state.config.domain,
+            placeholder="example.com",
+            help="Enter domain without protocol (http/https)",
+        )
+    with col_comment:
+        comment = st.text_input(
+            "Case Comment",
+            value=st.session_state.config.comment,
+            placeholder="Internal note for this scan",
+        )
+
+    st.markdown("---")
+
+
+    st.subheader("🔎 Dorking Strategy")
+    st.caption("Select one dorking mode. Only one option can be active at a time.")
+
+    dork_labels = {
+        "n": "None",
+        "basic": "Basic",
+        "iot": "IoT",
+        "files": "Files",
+        "admins": "Admins",
+        "web": "Web",
+        "custom": "Custom",
+    }
     current_dork = st.session_state.config.dorking_mode
-    try:
-        dork_idx = dork_values.index(current_dork)
-    except ValueError:
-        dork_idx = 0
 
-    snap_options = ["None", "Screenshot", "Page Copy", "Wayback Machine"]
-    snap_values = ["n", "s", "p", "w"]
-    current_snap_val = (
+    dork_cols = st.columns(len(dork_labels))
+    selected_dork = current_dork
+
+    for i, (value, label) in enumerate(dork_labels.items()):
+        with dork_cols[i]:
+            if st.checkbox(
+                label,
+                value=(current_dork == value),
+                key=f"dork_{value}",
+            ):
+                selected_dork = value
+
+    checked_dorks = [v for v in dork_labels if st.session_state.get(f"dork_{v}", False)]
+    if len(checked_dorks) == 0:
+        selected_dork = "n"
+    elif len(checked_dorks) == 1:
+        selected_dork = checked_dorks[0]
+    else:
+        new_picks = [v for v in checked_dorks if v != current_dork]
+        selected_dork = new_picks[-1] if new_picks else checked_dorks[-1]
+
+    st.markdown("---")
+
+
+    st.subheader("📸 Snapshot Mode")
+    st.caption("Select one snapshot method. Only one option can be active at a time.")
+
+    snap_labels = {
+        "n": "None",
+        "s": "Screenshot",
+        "p": "Page Copy",
+        "w": "Wayback Machine",
+    }
+    current_snap = (
         st.session_state.config.snapshot_mode.value
         if hasattr(st.session_state.config.snapshot_mode, "value")
         else "n"
     )
-    try:
-        snap_idx = snap_values.index(current_snap_val)
-    except ValueError:
-        snap_idx = 0
 
-    with st.form("scan_form", border=False):
-        col1, col2 = st.columns(2)
+    snap_cols = st.columns(len(snap_labels))
+    selected_snap = current_snap
 
-        with col1:
-            domain = st.text_input(
-                "Target Domain",
-                value=st.session_state.config.domain,
-                help="e.g., example.com",
-            )
-        with col2:
-            comment = st.text_input(
-                "Case Comment / Internal Note",
-                value=st.session_state.config.comment,
+    for i, (value, label) in enumerate(snap_labels.items()):
+        with snap_cols[i]:
+            st.checkbox(
+                label,
+                value=(current_snap == value),
+                key=f"snap_{value}",
             )
 
-        page_search = st.checkbox(
-            "Enable Page Search", value=st.session_state.config.page_search
+    checked_snaps = [v for v in snap_labels if st.session_state.get(f"snap_{v}", False)]
+    if len(checked_snaps) == 0:
+        selected_snap = "n"
+    elif len(checked_snaps) == 1:
+        selected_snap = checked_snaps[0]
+    else:
+        new_picks = [v for v in checked_snaps if v != current_snap]
+        selected_snap = new_picks[-1] if new_picks else checked_snaps[-1]
+
+    wb_from, wb_to = "", ""
+    if selected_snap == "w":
+        col_wb1, col_wb2 = st.columns(2)
+        with col_wb1:
+            wb_from = st.text_input("Wayback Start Date", placeholder="YYYYMMDD")
+        with col_wb2:
+            wb_to = st.text_input("Wayback End Date", placeholder="YYYYMMDD")
+
+    st.markdown("---")
+
+
+    st.subheader("🔍 Page Search")
+
+    page_search = st.checkbox(
+        "Enable page search on target",
+        value=st.session_state.config.page_search,
+    )
+
+    keywords = []
+    if page_search:
+        keywords_str = st.text_input(
+            "Keywords (comma-separated)",
+            placeholder="login, admin, dashboard, api",
+            help="Leave empty to search all pages",
         )
+        keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
 
-        if page_search:
-            keywords_str = st.text_input(
-                "Keywords (comma-separated)",
-                placeholder="login, admin, dashboard, api",
-                help="Leave empty to search all pages",
-            )
-            st.session_state.config.keywords = [
-                k.strip() for k in keywords_str.split(",") if k.strip()
-            ]
+    st.markdown("---")
 
-        dorking_mode = st.selectbox(
-            "Dorking Strategy",
-            dork_options,
-            index=dork_idx,
-            help="Select predefined or custom dork sets",
-        )
 
-        col3, col4 = st.columns(2)
+    st.subheader("🔗 External APIs")
+    st.caption("Check each API you want to use. A key input field will appear for each selected API.")
 
-        with col3:
-            use_api = st.checkbox(
-                "Use External APIs",
-                value=st.session_state.config.api_ids[0] != "Empty",
-            )
-            api_input = ""
-            username = None
-            if use_api:
-                api_input = st.text_input(
-                    "API IDs (comma-separated)",
-                    placeholder="1, 3",
-                    help="Check your API manager for valid IDs",
+    api_definitions = {
+        "api_vt": {"label": "VirusTotal", "id": "1"},
+        "api_ss": {"label": "SecurityTrails", "id": "2"},
+        "api_hb": {"label": "HudsonRock (doesn't require API key)", "id": "3"},
+    }
+
+    api_col1, api_col2, api_col3 = st.columns(3)
+    api_containers = [api_col1, api_col2, api_col3]
+
+    selected_apis = []
+    api_keys_entered = {}
+    username = None
+
+    for i, (key, info) in enumerate(api_definitions.items()):
+        with api_containers[i]:
+            checked = st.checkbox(info["label"], key=key)
+            if checked:
+                selected_apis.append(info["id"])
+                api_key_val = st.text_input(
+                    f"{info['label']} API Key",
+                    type="password",
+                    placeholder=f"Enter {info['label']} key...",
+                    key=f"{key}_key",
                 )
-                if "3" in api_input.split(","):
-                    username = st.text_input(
-                        "Known username from domain (optional)"
-                    )
+                api_keys_entered[info["id"]] = api_key_val
 
-        with col4:
-            snap_mode = st.selectbox(
-                "Snapshot Mode",
-                snap_options,
-                index=snap_idx,
-                help="Capture visual or HTML state of the target",
-            )
-            wb_from, wb_to = "", ""
-            if snap_mode == "Wayback Machine":
-                c1, c2 = st.columns(2)
-                with c1:
-                    wb_from = st.text_input("Start date (YYYYMMDD)")
-                with c2:
-                    wb_to = st.text_input("End date (YYYYMMDD)")
 
-        submitted = st.form_submit_button("▶️ Start Scan", type="primary")
+    st.markdown("---")
 
-    if submitted:
+
+    if st.button("▶️ Start Scan", type="primary", use_container_width=True):
         if not domain or not validate_domain(domain):
-            st.error(
-                "❌ Invalid domain format. Please enter a valid domain without a protocol prefix."
-            )
+            st.error("❌ Invalid domain format. Please enter a valid domain without a protocol prefix.")
             return
 
         cfg = ScanConfig(
@@ -280,14 +328,10 @@ def render_scan_form():
             url=f"http://{domain}/",
             comment=comment,
             page_search=page_search,
-            keywords=st.session_state.config.keywords,
-            dorking_mode=dorking_mode.lower(),
-            api_ids=(
-                [x.strip() for x in api_input.split(",") if x.strip().isdigit()]
-                if use_api and api_input
-                else ["Empty"]
-            ),
-            snapshot_mode=SnapshotMode(snap_mode[0].lower()),
+            keywords=keywords,
+            dorking_mode=selected_dork,
+            api_ids=selected_apis if selected_apis else ["Empty"],
+            snapshot_mode=SnapshotMode(selected_snap),
             username=username,
             wb_from=wb_from or "N",
             wb_to=wb_to or "N",
@@ -328,7 +372,7 @@ def render_results():
 
     st.markdown('<div class="report-frame">', unsafe_allow_html=True)
     st.components.v1.html(res["html_content"], height=800, scrolling=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("")
 
