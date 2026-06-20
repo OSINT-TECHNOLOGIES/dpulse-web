@@ -56,6 +56,7 @@ def compute_dork_mark(mode: str) -> str:
 
 
 def load_report_html() -> str:
+    """Reads report.html from the same directory as the script."""
     template_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "report.html"
     )
@@ -66,6 +67,7 @@ def load_report_html() -> str:
 
 
 def simulate_scan(cfg: ScanConfig) -> dict:
+    """Stub backend. Replace with a real call to data_processing.data_gathering()"""
     time.sleep(2.5)
     html_content = load_report_html()
     return {
@@ -80,6 +82,11 @@ def simulate_scan(cfg: ScanConfig) -> dict:
 
 
 def apply_theme():
+    """
+    Minimal CSS that inherits the active Streamlit theme.
+    No hardcoded colors — works with both light and dark modes.
+    The iframe for the report stretches to fill the viewport.
+    """
     st.markdown(
         """
         <style>
@@ -123,6 +130,14 @@ def apply_theme():
             [data-testid="stForm"] {
                 border: none !important;
                 padding: 0 !important;
+            }
+
+            /* ===== Make the report iframe large ===== */
+            .report-frame iframe {
+                width: 100% !important;
+                min-height: 80vh !important;
+                border: none !important;
+                border-radius: 8px;
             }
 
             /* ===== Neutral scrollbar ===== */
@@ -309,18 +324,13 @@ def render_results():
 
     st.markdown("---")
 
-    with st.expander("📋 Configuration Summary"):
-        st.json(
-            {
-                "Report Type": "HTML",
-                "Dorking Strategy": res["dorking"],
-                "APIs Used": res["apis"],
-                "Snapshot Mode": res["snapshot"],
-            }
-        )
+    st.subheader("📄 Interactive Report")
 
-    with st.expander("📄 Generated Report (HTML Preview)", expanded=True):
-        st.components.v1.html(res["html_content"], height=600, scrolling=True)
+    st.markdown('<div class="report-frame">', unsafe_allow_html=True)
+    st.components.v1.html(res["html_content"], height=800, scrolling=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("")
 
     st.download_button(
         label="⬇️ Download HTML Report",
