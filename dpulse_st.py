@@ -155,12 +155,56 @@ def apply_theme():
     st.markdown(
         """
         <style>
-            .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-            .stTabs [data-baseweb="tab"] { height: 48px; border-radius: 8px; padding: 0.5rem 1rem; font-weight: 500; }
-            .stButton > button, .stDownloadButton > button { font-weight: 500; border-radius: 8px; padding: 0.6rem 1rem; transition: all 0.2s ease; }
-            .stButton > button:hover, .stDownloadButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.15); }
-            div[data-testid="metric-container"] { border-radius: 8px; padding: 1rem; background: var(--st-backgroundColor-secondary); }
-            [data-testid="stForm"] { border: none !important; padding: 0 !important; }
+            /* Global Layout & Typography */
+            .main > div { padding-top: 1rem; }
+            h1, h2, h3, h4, h5, h6 { color: #0f172a !important; font-weight: 700 !important; margin-bottom: 0.8rem !important; line-height: 1.3 !important; }
+            
+            /* Section Headers */
+            .stSubheader { 
+                font-size: 1.25rem !important; 
+                font-weight: 600 !important; 
+                padding-top: 1.5rem !important; 
+                border-left: 4px solid #3b82f6; 
+                padding-left: 0.75rem !important;
+                color: #1e293b !important;
+            }
+            
+            /* Metrics Cards */
+            div[data-testid="metric-container"] { 
+                background: #ffffff !important; 
+                border-radius: 12px !important; 
+                padding: 1.25rem !important; 
+                box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important;
+                border: 1px solid #e2e8f0 !important;
+            }
+            div[data-testid="stMetricLabel"] { font-size: 0.8rem !important; color: #64748b !important; font-weight: 500 !important; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.25rem !important; }
+            div[data-testid="stMetricValue"] { font-size: 1.75rem !important; font-weight: 700 !important; color: #0f172a !important; line-height: 1.2 !important; }
+            
+            /* Tables */
+            .dataframe-table { border-collapse: collapse !important; width: 100% !important; margin-top: 0.5rem !important; }
+            .dataframe-table th { background: #f8fafc !important; color: #334155 !important; font-weight: 600 !important; padding: 12px 14px !important; border-bottom: 2px solid #e2e8f0 !important; text-align: left !important; }
+            .dataframe-table td { padding: 11px 14px !important; border-bottom: 1px solid #e2e8f0 !important; color: #334155 !important; font-size: 0.9rem !important; }
+            .dataframe-table tr:hover { background-color: #f1f5f9 !important; }
+            
+            /* Expanders */
+            [data-testid="stExpander"] { border-radius: 12px !important; border: 1px solid #e2e8f0 !important; margin-bottom: 1rem !important; background: #ffffff !important; }
+            .streamlit-expanderHeader { font-weight: 600 !important; padding: 14px 16px !important; background: #fafbfc !important; border-radius: 12px 12px 0 0 !important; color: #334155 !important; }
+            
+            /* Status Badges */
+            .badge { display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; margin-right: 8px; vertical-align: middle; }
+            .badge-success { background: #dcfce7; color: #166534; }
+            .badge-warning { background: #fef9c3; color: #854d0e; }
+            .badge-danger { background: #fee2e2; color: #991b1b; }
+            .badge-info { background: #dbeafe; color: #1e40af; }
+            
+            /* Buttons & Downloads */
+            .stButton > button, .stDownloadButton > button { 
+                font-weight: 600 !important; border-radius: 8px !important; padding: 0.7rem 1.2rem !important; 
+                transition: all 0.2s ease !important; box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+            }
+            .stButton > button:hover, .stDownloadButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.15) !important; }
+            
+            /* Scrollbar */
             ::-webkit-scrollbar { width: 8px; height: 8px; }
             ::-webkit-scrollbar-track { background: transparent; }
             ::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.35); border-radius: 4px; }
@@ -308,15 +352,15 @@ def render_results():
     st.subheader("🌐 Domain Information")
     w1, w2 = st.columns(2)
     with w1:
-        st.info(f"**Domain:** {res['whois']['domain']}")
-        st.info(f"**Full URL:** [{res['whois']['url']}]({res['whois']['url']})")
-        st.info(f"**IP Address:** `{res['whois']['ip']}`")
-        st.info(f"**Registrar:** {res['whois']['registrar']}")
+        st.markdown("**Domain:** " + res['whois']['domain'])
+        st.markdown(f"**Full URL:** [{res['whois']['url']}]({res['whois']['url']})")
+        st.markdown(f"**IP Address:** `{res['whois']['ip']}`")
+        st.markdown("**Registrar:** " + res['whois']['registrar'])
     with w2:
-        st.info(f"**Created:** {res['whois']['created']}")
-        st.info(f"**Expires:** {res['whois']['expires']}")
-        st.info(f"**Organization:** {res['whois']['org']}")
-        st.info(f"**Contacts:** {res['whois']['contacts']}")
+        st.markdown("**Created:** " + res['whois']['created'])
+        st.markdown("**Expires:** " + res['whois']['expires'])
+        st.markdown("**Organization:** " + res['whois']['org'])
+        st.markdown("**Contacts:** " + res['whois']['contacts'])
         
     st.subheader("🔒 DNS & SSL Information")
     d1, d2 = st.columns(2)
@@ -382,11 +426,11 @@ def render_results():
         st.code(res['files']['robots'], language="text")
         st.divider()
         st.code(res['files']['sitemap'], language="xml")
-
+        
     if res.get('dorking_raw'):
         with st.expander("🔍 Dorking Scan Results", expanded=False):
             st.text_area("Google Dorking Output", value=res['dorking_raw'], height=200)
-
+            
     if res.get('pagesearch_raw'):
         with st.expander("📑 PageSearch Results", expanded=False):
             st.text_area("PageSearch Process Listing", value=res['pagesearch_raw'], height=200)
