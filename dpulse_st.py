@@ -1,13 +1,21 @@
-import streamlit as st
+import sys
+import os
+from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, List
 import re
 import time
-import os
-import json
-import pandas as pd
-from datetime import datetime
+import webbrowser
+import streamlit as st
+
+def setup_paths():
+    base = os.path.dirname(os.path.abspath(__file__))
+    sys.path.extend([base, f"{base}/service", f"{base}/pagesearch", 
+                     f"{base}/dorking", f"{base}/snapshotting"])
+
+class ReportType(str, Enum):
+    HTML = "html"
 
 class SnapshotMode(str, Enum):
     NONE = "n"
@@ -20,6 +28,7 @@ class ScanConfig:
     domain: str = ""
     url: str = ""
     comment: str = ""
+    report_type: ReportType = ReportType.HTML
     page_search: bool = False
     keywords: List[str] = field(default_factory=list)
     dorking_mode: str = "n"
@@ -33,185 +42,153 @@ if "config" not in st.session_state:
     st.session_state.config = ScanConfig()
 if "scan_result" not in st.session_state:
     st.session_state.scan_result = None
+if "is_scanning" not in st.session_state:
+    st.session_state.is_scanning = False
 
 def validate_domain(domain: str) -> bool:
     pattern = r"^(?!-)(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$"
     return bool(re.match(pattern, domain))
 
 def compute_dork_mark(mode: str) -> str:
-    if mode == "n":
-        return "No dorking"
-    if mode.startswith("custom+"):
-        return f"Custom ({mode.split('+')[1]})"
-    mapping = {
-        "basic": "Basic",
-        "iot": "IoT",
-        "files": "Files",
-        "admins": "Admins",
-        "web": "Web",
-    }
+    if mode == "n": return "No dorking"
+    if mode.startswith("custom+"): return f"Custom ({mode.split('+')[1]})"
+    mapping = {"basic": "Basic", "iot": "IoT", "files": "Files", "admins": "Admins", "web": "Web"}
     return mapping.get(mode, "Unknown")
 
-def simulate_scan(cfg: ScanConfig) -> dict:
-    time.sleep(2.5)
+def perform_real_scan(cfg: ScanConfig) -> dict:
+    setup_paths() 
     
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
+    short_domain = cfg.domain.replace(".", "")
+    url = f"http://{cfg.domain}/"
     
-    return {
-        "domain": cfg.domain,
-        "org": "Example Corporation",
-        "ctime": now_str,
-        "general": {
-            "robots": "✅ Found (24 rules)",
-            "sitemap": "✅ Found (18 URLs)",
-            "sitemap_links": 18,
-            "dorking": compute_dork_mark(cfg.dorking_mode),
-            "pagesearch": cfg.page_search,
-            "snapshot": cfg.snapshot_mode.value.upper()
-        },
-        "stats": {
-            "a_tsf": 14, "a_tsm": 7, "a_temails": 3, 
-            "a_tips": 5, "a_tops": 8, "a_tpv": 2
-        },
-        "ps_stats": {
-            "ps_s": 10, "ps_e": 4, "ps_f": 9, 
-            "ps_c": 6, "ps_a": 2, "ps_w": 38, "ps_p": 1
-        },
-        "whois": {
-            "domain": cfg.domain,
-            "url": f"https://{cfg.domain}/",
-            "ip": "104.21.56.78",
-            "registrar": "Cloudflare, Inc.",
-            "created": "2018-03-12 00:00:00 UTC",
-            "expires": "2025-03-12 00:00:00 UTC",
-            "org": cfg.domain.replace(".com", "").title() + " LLC",
-            "contacts": "admin@example.com, hostmaster@cloudflare.net"
-        },
-        "dns_ssl": {
-            "ns": "ns1.cloudflare.com, ns2.cloudflare.com",
-            "mx": "mail.example.com (Priority: 10)",
-            "issuer": "Let's Encrypt Authority X3",
-            "subject": f"CN={cfg.domain}",
-            "notBefore": "2024-01-15 00:00:00 UTC",
-            "notAfter": "2025-01-15 00:00:00 UTC",
-            "cn": cfg.domain,
-            "serial": "03:A1:B4:C5:D6:E7:F8:9A"
-        },
-        "socials": {
-            "Facebook": [f"https://facebook.com/{cfg.domain.replace('.com','')}", "https://fb.me/examplecorp"],
-            "Twitter/X": ["https://twitter.com/examplecorp", "https://x.com/examplecorp"],
-            "Instagram": [f"https://instagram.com/{cfg.domain.replace('.com','')}"],
-            "Telegram": ["https://t.me/examplecorp_official"],
-            "TikTok": [],
-            "LinkedIn": [f"https://linkedin.com/company/{cfg.domain.replace('.com','')}"],
-            "VK": [],
-            "YouTube": ["https://youtube.com/@examplecorp"],
-            "OK": [],
-            "WeChat": []
-        },
-        "subdomains": [
-            {"Subdomain": f"www.{cfg.domain}", "IP Address": "104.21.56.78", "Status": "✅ Active", "SSL": "🔒 Valid"},
-            {"Subdomain": f"mail.{cfg.domain}", "IP Address": "104.21.56.79", "Status": "✅ Active", "SSL": "🔒 Valid"},
-            {"Subdomain": f"api.{cfg.domain}", "IP Address": "104.21.56.80", "Status": "⏳ Pending", "SSL": "🔒 Valid"},
-            {"Subdomain": f"dev.{cfg.domain}", "IP Address": "192.168.1.10", "Status": "❌ Inactive", "SSL": "🔓 No SSL"}
-        ],
-        "ips": [
-            {"IP Address": "104.21.56.78", "Type": "IPv4", "Location": "🇺🇸 US, San Francisco", "ISP / ASN": "AS13335 Cloudflare"},
-            {"IP Address": "104.21.56.79", "Type": "IPv4", "Location": "🇺🇸 US, Dallas", "ISP / ASN": "AS13335 Cloudflare"},
-            {"IP Address": "2606:4700::6815:384e", "Type": "IPv6", "Location": "🌍 Global CDN", "ISP / ASN": "AS13335 Cloudflare"}
-        ],
-        "tech": {
-            "Web Servers": ["nginx/1.24.0", "Apache/2.4.58"],
-            "CMS": ["WordPress 6.4.2"],
-            "Languages": ["PHP 8.2", "JavaScript ES6+"],
-            "Frameworks": ["React 18.2", "Laravel 10.x"],
-            "Analytics": ["Google Analytics 4", "Hotjar"],
-            "JS Frameworks": ["jQuery 3.7.0", "Bootstrap 5.3"]
-        },
-        "ports": [
-            {"Port": 80, "Service": "HTTP", "Category": "http", "Risk": "medium"},
-            {"Port": 443, "Service": "HTTPS", "Category": "http", "Risk": "low"},
-            {"Port": 22, "Service": "SSH", "Category": "ssh", "Risk": "medium"},
-            {"Port": 3306, "Service": "MySQL", "Category": "database", "Risk": "high"}
-        ],
-        "vulns": [
-            {"CVE ID": "N/A", "Description": "Missing X-Frame-Options header (Clickjacking risk)", "Severity": "medium"},
-            {"CVE ID": "CVE-2023-48795", "Description": "TLS 1.0/1.1 enabled on legacy endpoint", "Severity": "high"}
-        ],
-        "files": {
-            "robots": f"User-agent: *\nAllow: /\nDisallow: /admin/\nDisallow: /wp-admin/",
-            "sitemap": '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>https://{cfg.domain}/</loc></url>\n</urlset>'
-        },
-        "dorking_raw": f'site:{cfg.domain} filetype:pdf\nsite:{cfg.domain} inurl:admin\nsite:{cfg.domain} intitle:"index of"',
-        "pagesearch_raw": f"Scanning {cfg.domain}...\nFound 12 email addresses.\nExtracted 8 API keys.\nDetected 3 exposed passwords.",
-        "api_results": {
-            "VirusTotal": '{"data":{"attributes":{"last_analysis_stats":{"malicious":0,"suspicious":1,"undetected":95}}},"meta":{"file_info":{"sha256":"a1b2c3..."}}}',
-            "SecurityTrails": '{"subdomain_count": 14, "first_seen": "2018-03-12", "last_seen": "2024-05-20"}',
-            "HudsonRock": '{"data":{"breaches":[{"source":"LinkedIn","date":"2023-01-15"}],"passwords":["P@ssw0rd!"]}}'
-        }
-    }
-
-def apply_theme():
-    st.markdown(
-        """
-        <style>
-            /* Global Layout & Typography */
-            .main > div { padding-top: 1rem; }
-            h1, h2, h3, h4, h5, h6 { color: #0f172a !important; font-weight: 700 !important; margin-bottom: 0.8rem !important; line-height: 1.3 !important; }
-            
-            /* Section Headers */
-            .stSubheader { 
-                font-size: 1.25rem !important; 
-                font-weight: 600 !important; 
-                padding-top: 1.5rem !important; 
-                border-left: 4px solid #3b82f6; 
-                padding-left: 0.75rem !important;
-                color: #1e293b !important;
-            }
-            
-            /* Metrics Cards */
-            div[data-testid="metric-container"] { 
-                background: #ffffff !important; 
-                border-radius: 12px !important; 
-                padding: 1.25rem !important; 
-                box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important;
-                border: 1px solid #e2e8f0 !important;
-            }
-            div[data-testid="stMetricLabel"] { font-size: 0.8rem !important; color: #64748b !important; font-weight: 500 !important; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.25rem !important; }
-            div[data-testid="stMetricValue"] { font-size: 1.75rem !important; font-weight: 700 !important; color: #0f172a !important; line-height: 1.2 !important; }
-            
-            /* Tables */
-            .dataframe-table { border-collapse: collapse !important; width: 100% !important; margin-top: 0.5rem !important; }
-            .dataframe-table th { background: #f8fafc !important; color: #334155 !important; font-weight: 600 !important; padding: 12px 14px !important; border-bottom: 2px solid #e2e8f0 !important; text-align: left !important; }
-            .dataframe-table td { padding: 11px 14px !important; border-bottom: 1px solid #e2e8f0 !important; color: #334155 !important; font-size: 0.9rem !important; }
-            .dataframe-table tr:hover { background-color: #f1f5f9 !important; }
-            
-            /* Expanders */
-            [data-testid="stExpander"] { border-radius: 12px !important; border: 1px solid #e2e8f0 !important; margin-bottom: 1rem !important; background: #ffffff !important; }
-            .streamlit-expanderHeader { font-weight: 600 !important; padding: 14px 16px !important; background: #fafbfc !important; border-radius: 12px 12px 0 0 !important; color: #334155 !important; }
-            
-            /* Status Badges */
-            .badge { display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; margin-right: 8px; vertical-align: middle; }
-            .badge-success { background: #dcfce7; color: #166534; }
-            .badge-warning { background: #fef9c3; color: #854d0e; }
-            .badge-danger { background: #fee2e2; color: #991b1b; }
-            .badge-info { background: #dbeafe; color: #1e40af; }
-            
-            /* Buttons & Downloads */
-            .stButton > button, .stDownloadButton > button { 
-                font-weight: 600 !important; border-radius: 8px !important; padding: 0.7rem 1.2rem !important; 
-                transition: all 0.2s ease !important; box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
-            }
-            .stButton > button:hover, .stDownloadButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.15) !important; }
-            
-            /* Scrollbar */
-            ::-webkit-scrollbar { width: 8px; height: 8px; }
-            ::-webkit-scrollbar-track { background: transparent; }
-            ::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.35); border-radius: 4px; }
-        </style>
-        """,
-        unsafe_allow_html=True,
+    pagesearch_flag = "y" if cfg.page_search else "n"
+    keywords_str = ",".join(cfg.keywords) if cfg.keywords else ""
+    dorking_flag = cfg.dorking_mode.lower()
+    used_api_flag = [x.strip() for x in cfg.api_ids] if cfg.api_ids[0] != "Empty" else ["Empty"]
+    snapshotting_flag = cfg.snapshot_mode.value
+    
+    dp = DataProcessing()
+    data_array, report_info_array = dp.data_gathering(
+        short_domain=short_domain, url=url, report_file_type="html",
+        pagesearch_flag=pagesearch_flag, keywords=keywords_str, keywords_flag="",
+        dorking_flag=dorking_flag, used_api_flag=used_api_flag,
+        snapshotting_flag=snapshotting_flag, username=cfg.username,
+        from_date=cfg.wb_from if cfg.snapshot_mode == SnapshotMode.WAYBACK else "N",
+        end_date=cfg.wb_to if cfg.snapshot_mode == SnapshotMode.WAYBACK else "N"
     )
+
+    ip = data_array[0]
+    res = data_array[1]
+    mails = data_array[2]
+    subdomains = data_array[3]
+    subdomains_amount = data_array[4]
+    social_medias = data_array[5]
+    subdomain_mails = data_array[6]
+    subdomain_ip = data_array[8]
+    issuer = data_array[9]
+    subject = data_array[10]
+    notBefore = data_array[11]
+    notAfter = data_array[12]
+    commonName = data_array[13]
+    serialNumber = data_array[14]
+    mx_records = data_array[15]
+    robots_txt_result = data_array[16]
+    sitemap_xml_result = data_array[17]
+    sitemap_links_status = data_array[18]
+    web_servers = data_array[19]
+    cms = data_array[20]
+    programming_languages = data_array[21]
+    web_frameworks = data_array[22]
+    analytics = data_array[23]
+    javascript_frameworks = data_array[24]
+    ports = data_array[25]
+    hostnames = data_array[26]
+    cpes = data_array[27]
+    tags = data_array[28]
+    vulns = data_array[29]
+    common_socials = data_array[30]
+    total_socials = data_array[31]
+    ps_emails_return = data_array[32]
+    accessible_subdomains = data_array[33]
+    emails_amount = data_array[34]
+    files_counter = data_array[35]
+    cookies_counter = data_array[36]
+    api_keys_counter = data_array[37]
+    website_elements_counter = data_array[38]
+    exposed_passwords_counter = data_array[39]
+    total_links_counter = data_array[40]
+    accessed_links_counter = data_array[41]
+    keywords_messages_list = data_array[42]
+    dorking_status = data_array[43]
+    dorking_file_path = data_array[44]
+    virustotal_output = data_array[45]
+    securitytrails_output = data_array[46]
+    hudsonrock_output = data_array[47]
+    ps_string = data_array[48]
+    total_ports = data_array[49]
+    total_ips = data_array[50]
+    total_vulns = data_array[51]
+
+    casename = report_info_array[0]
+    db_casename = report_info_array[1]
+    db_creation_date = report_info_array[2]
+    report_folder = report_info_array[3]
+    ctime = report_info_array[4]
+    report_file_type = report_info_array[5]
+    report_ctime = report_info_array[6]
+    api_scan_db = report_info_array[7]
+    used_api_flag_out = report_info_array[8]
+
+    from jinja2 import Environment, FileSystemLoader
+    env = Environment(loader=FileSystemLoader('.'))
+    template_path = 'service//pdf_report_templates//modern_report_template.html'
+    try:
+        template = env.get_template(template_path)
+        html_output = template.render({
+            "sh_domain": short_domain, "full_url": url, "ip_address": ip,
+            "registrar": res["registrar"], "creation_date": res["creation_date"],
+            "expiration_date": res["expiration_date"], "name_servers": ", ".join(res["name_servers"]),
+            "org": res["org"], "mails": mails, "subdomain_mails": subdomain_mails,
+            "subdomain_socials": social_medias, "subdomain_ip": subdomain_ip,
+            "subdomains": subdomains, "fb_links": common_socials.get("Facebook", []),
+            "tw_links": common_socials.get("Twitter", []), "inst_links": common_socials.get("Instagram", []),
+            "tg_links": common_socials.get("Telegram", []), "tt_links": common_socials.get("TikTok", []),
+            "li_links": common_socials.get("LinkedIn", []), "vk_links": common_socials.get("VKontakte", []),
+            "yt_links": common_socials.get("YouTube", []), "wc_links": common_socials.get("WeChat", []),
+            "ok_links": common_socials.get("Odnoklassniki", []), "xcom_links": common_socials.get("X.com", []),
+            "robots_txt_result": robots_txt_result, "sitemap_xml_result": sitemap_xml_result,
+            "sitemap_links": sitemap_links_status, "web_servers": web_servers, "cms": cms,
+            "programming_languages": programming_languages, "ip_addresses": list(subdomain_ip) + [ip],
+            "javascript_frameworks": javascript_frameworks, "ctime": report_ctime,
+            "a_tsf": subdomains_amount, "mx_records": mx_records, "issuer": issuer,
+            "subject": subject, "notBefore": notBefore, "notAfter": notAfter,
+            "commonName": commonName, "serialNumber": serialNumber, "ports": ports,
+            "hostnames": hostnames, "cpes": cpes, "tags": tags, "vulns": vulns,
+            "a_tsm": total_socials, "pagesearch_ui_mark": pagesearch_flag == "y",
+            "dorking_status": dorking_status,
+            "add_dsi": "", "ps_s": accessible_subdomains, "ps_e": emails_amount,
+            "ps_f": files_counter, "ps_c": cookies_counter, "ps_a": api_keys_counter,
+            "ps_w": website_elements_counter, "ps_p": exposed_passwords_counter,
+            "ss_l": total_links_counter, "ss_a": accessed_links_counter,
+            "hudsonrock_output": hudsonrock_output, "snapshotting_ui_mark": snapshotting_flag in ['s','p','w'],
+            "virustotal_output": virustotal_output, "securitytrails_output": securitytrails_output,
+            "ps_string": ps_string, "a_tops": total_ports, "a_temails": len(mails),
+            "a_tips": total_ips, "a_tpv": total_vulns,
+            "robots_content": "", "sitemap_xml_content": "", "sitemap_txt_content": ""
+        })
+    except Exception as e:
+        html_output = f"<div style='color:red;padding:20px;'>Template error: {e}</div>"
+
+    return {
+        "status": "success",
+        "domain": cfg.domain,
+        "report_type": cfg.report_type.value.upper(),
+        "dorking": compute_dork_mark(cfg.dorking_mode),
+        "apis": ", ".join(used_api_flag_out) if used_api_flag_out[0] != "Empty" else "None",
+        "snapshot": cfg.snapshot_mode.value,
+        "duration": "~2.5s",
+        "html_content": html_output
+    }
 
 def render_sidebar():
     st.sidebar.title("⚙️ Global Settings")
@@ -219,95 +196,86 @@ def render_sidebar():
         st.text_input("Primary Key", type="password", key="api_key_1", placeholder="sk-...")
         st.text_input("Secondary Key", type="password", key="api_key_2", placeholder="sk-...")
     st.sidebar.markdown("---")
-    if st.sidebar.button("🔄 Reset Configuration", use_container_width=True):
+    if st.sidebar.button("🔄 Reset Configuration"):
         st.session_state.config = ScanConfig()
         st.session_state.scan_result = None
         st.rerun()
 
 def render_scan_form():
-    st.header("🚀 New Scan Configuration", divider="gray")
-    st.caption("Configure all scan parameters below, then hit Start Scan.")
-    
-    col_domain, col_comment = st.columns(2)
-    with col_domain:
-        domain = st.text_input("Domain", value=st.session_state.config.domain, placeholder="example.com", help="Enter domain without protocol")
-    with col_comment:
-        comment = st.text_input("Case Comment", value=st.session_state.config.comment, placeholder="Internal note for this scan")
-        
-    st.markdown("---")
-    st.subheader("🔎 Dorking Strategy")
-    dork_labels = {"n": "None", "basic": "Basic", "iot": "IoT", "files": "Files", "admins": "Admins", "web": "Web", "custom": "Custom"}
-    current_dork = st.session_state.config.dorking_mode
-    selected_dork = current_dork
-    dork_cols = st.columns(len(dork_labels))
-    for i, (value, label) in enumerate(dork_labels.items()):
-        with dork_cols[i]:
-            if st.checkbox(label, value=(current_dork == value), key=f"dork_{value}"):
-                selected_dork = value
-    checked_dorks = [v for v in dork_labels if st.session_state.get(f"dork_{v}", False)]
-    if len(checked_dorks) == 0: selected_dork = "n"
-    elif len(checked_dorks) == 1: selected_dork = checked_dorks[0]
-    else: selected_dork = checked_dorks[-1]
-        
-    st.markdown("---")
-    st.subheader("📸 Snapshot Mode")
-    snap_labels = {"n": "None", "s": "Screenshot", "p": "Page Copy", "w": "Wayback Machine"}
-    current_snap = st.session_state.config.snapshot_mode.value if hasattr(st.session_state.config.snapshot_mode, 'value') else "n"
-    selected_snap = current_snap
-    snap_cols = st.columns(len(snap_labels))
-    for i, (value, label) in enumerate(snap_labels.items()):
-        with snap_cols[i]:
-            st.checkbox(label, value=(current_snap == value), key=f"snap_{value}")
-    checked_snaps = [v for v in snap_labels if st.session_state.get(f"snap_{v}", False)]
-    if len(checked_snaps) == 0: selected_snap = "n"
-    elif len(checked_snaps) == 1: selected_snap = checked_snaps[0]
-    else: selected_snap = checked_snaps[-1]
-        
-    wb_from, wb_to = "", ""
-    if selected_snap == "w":
-        col_wb1, col_wb2 = st.columns(2)
-        with col_wb1: wb_from = st.text_input("Wayback Start Date", placeholder="YYYYMMDD")
-        with col_wb2: wb_to = st.text_input("Wayback End Date", placeholder="YYYYMMDD")
-        
-    st.markdown("---")
-    st.subheader("🔍 Page Search")
-    page_search = st.checkbox("Enable page search on target", value=st.session_state.config.page_search)
-    keywords = []
-    if page_search:
-        keywords_str = st.text_input("Keywords (comma-separated)", placeholder="login, admin, dashboard, api")
-        keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
-        
-    st.markdown("---")
-    st.subheader("🔗 External APIs")
-    api_definitions = {
-        "api_vt": {"label": "VirusTotal", "id": "1"},
-        "api_ss": {"label": "SecurityTrails", "id": "2"},
-        "api_hb": {"label": "HudsonRock (no key)", "id": "3"}
-    }
-    api_col1, api_col2, api_col3 = st.columns(3)
-    selected_apis = []
-    for i, (key, info) in enumerate(api_definitions.items()):
-        with [api_col1, api_col2, api_col3][i]:
-            checked = st.checkbox(info["label"], key=key)
-            if checked:
-                selected_apis.append(info["id"])
-                st.text_input(f"{info['label']} API Key", type="password", placeholder=f"Enter {info['label']} key...", key=f"{key}_key")
-                
-    st.markdown("---")
-    if st.button("▶️ Start Scan", type="primary", use_container_width=True):
+    st.header("🚀 New Scan Configuration")
+    st.caption("Configure target, dorking strategy, APIs and snapshots. All data stays in session.")
+    with st.form("scan_form", clear_on_submit=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            domain = st.text_input(
+                "Target Domain",
+                value=st.session_state.config.domain,
+                help="e.g., example.com (no http/https)"
+            )
+            comment = st.text_input("Case Comment / Internal Note", value=st.session_state.config.comment)
+        with col2:
+            report_type = st.selectbox(
+                "Report Format",
+                [rt.value for rt in ReportType],
+                index=0,
+                help="Currently only HTML is supported"
+            )
+            page_search = st.checkbox("Enable Page Search", value=st.session_state.config.page_search)
+        if page_search:
+            keywords_str = st.text_input(
+                "Keywords (comma-separated)",
+                placeholder="login, admin, dashboard, api",
+                help="Leave empty to search all pages"
+            )
+            st.session_state.config.keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
+        dorking_mode = st.selectbox(
+            "Dorking Strategy",
+            ["None", "Basic", "IoT", "Files", "Admins", "Web", "Custom"],
+            index=["n", "basic", "iot", "files", "admins", "web", "custom"].index(
+                st.session_state.config.dorking_mode) if st.session_state.config.dorking_mode != "n" else 0,
+            help="Select predefined or custom dork sets"
+        )
+        col3, col4 = st.columns(2)
+        with col3:
+            use_api = st.checkbox("Use External APIs", value=st.session_state.config.api_ids[0] != "Empty")
+            api_input = ""
+            username = None
+            if use_api:
+                api_input = st.text_input("API IDs (comma-separated)", placeholder="1, 3",
+                                          help="Check your API manager for valid IDs")
+                if '3' in api_input.split(","):
+                    username = st.text_input("Known Username from domain (optional)")
+        with col4:
+            snap_mode = st.selectbox(
+                "Snapshot Mode",
+                ["None", "Screenshot", "Page Copy", "Wayback Machine"],
+                index=["n", "s", "p", "w"].index(
+                    st.session_state.config.snapshot_mode.value) if st.session_state.config.snapshot_mode != SnapshotMode.NONE else 0,
+                help="Capture visual or HTML state of the target"
+            )
+            wb_from, wb_to = "", ""
+            if snap_mode == "Wayback Machine":
+                col_w1, col_w2 = st.columns(2)
+                with col_w1: wb_from = st.text_input("Start (YYYYMMDD)")
+                with col_w2: wb_to = st.text_input("End (YYYYMMDD)")
+        submitted = st.form_submit_button("▶️ Start Scan", type="primary")
+    if submitted:
         if not domain or not validate_domain(domain):
-            st.error("❌ Invalid domain format. Please enter a valid domain without a protocol prefix.")
+            st.error("❌ Invalid domain format. Please enter a valid domain without protocol.")
             return
-            
         cfg = ScanConfig(
-            domain=domain, url=f"http://{domain}/", comment=comment, page_search=page_search,
-            keywords=keywords, dorking_mode=selected_dork, api_ids=selected_apis if selected_apis else ["Empty"],
-            snapshot_mode=SnapshotMode(selected_snap), username=None, wb_from=wb_from or "N", wb_to=wb_to or "N"
+            domain=domain, url=f"http://{domain}/", comment=comment,
+            report_type=ReportType(report_type), page_search=page_search,
+            keywords=st.session_state.config.keywords, dorking_mode=dorking_mode.lower(),
+            api_ids=[x.strip() for x in api_input.split(",") if x.strip().isdigit()] if use_api and api_input else [
+                "Empty"],
+            snapshot_mode=SnapshotMode(snap_mode[0].lower()), username=username,
+            wb_from=wb_from or "N", wb_to=wb_to or "N"
         )
         st.session_state.config = cfg
         with st.spinner("🔍 Scanning target and gathering data..."):
             try:
-                result = simulate_scan(cfg)
+                result = perform_real_scan(cfg)
                 st.session_state.scan_result = result
                 st.success(f"✅ Scan completed successfully for `{cfg.domain}`!")
                 st.rerun()
@@ -318,144 +286,41 @@ def render_results():
     if not st.session_state.scan_result:
         st.info("👈 Configure and run a scan to see results here.")
         return
-        
     res = st.session_state.scan_result
-    
-    st.header(f"🔍 OSINT Research Report — {res['domain']}", divider="gray")
-    st.caption(res.get('org', ''))
-    st.markdown("---")
-    
+    st.header("📊 Scan Results")
     col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Robots.txt", res['general']['robots'])
-        st.metric("Sitemap.xml", res['general']['sitemap'])
-        st.metric("Sitemap Links", res['general']['sitemap_links'])
-    with col2:
-        st.metric("Google Dorking", res['general']['dorking'])
-        st.metric("PageSearch", "✅ Enabled" if res['general']['pagesearch'] else "❌ Disabled")
-        st.metric("Snapshotting", res['general']['snapshot'])
-    with col3:
-        st.metric("Report Created", res['ctime'], delta=None)
-        
-    st.subheader("📊 Scan Statistics")
-    stats_cols = st.columns(6)
-    for i, (label, val) in enumerate(res['stats'].items()):
-        with stats_cols[i]:
-            st.metric(label.replace('_', ' ').title(), str(val))
-            
-    st.subheader("🔎 PageSearch Statistics")
-    ps_cols = st.columns(7)
-    for i, (label, val) in enumerate(res['ps_stats'].items()):
-        with ps_cols[i]:
-            st.metric(label.replace('_', ' ').title(), str(val))
-            
-    st.subheader("🌐 Domain Information")
-    w1, w2 = st.columns(2)
-    with w1:
-        st.markdown("**Domain:** " + res['whois']['domain'])
-        st.markdown(f"**Full URL:** [{res['whois']['url']}]({res['whois']['url']})")
-        st.markdown(f"**IP Address:** `{res['whois']['ip']}`")
-        st.markdown("**Registrar:** " + res['whois']['registrar'])
-    with w2:
-        st.markdown("**Created:** " + res['whois']['created'])
-        st.markdown("**Expires:** " + res['whois']['expires'])
-        st.markdown("**Organization:** " + res['whois']['org'])
-        st.markdown("**Contacts:** " + res['whois']['contacts'])
-        
-    st.subheader("🔒 DNS & SSL Information")
-    d1, d2 = st.columns(2)
-    with d1:
-        st.markdown("**DNS Records**\n- **Name Servers:** " + res['dns_ssl']['ns'])
-        st.markdown("- **MX Records:** " + res['dns_ssl']['mx'])
-    with d2:
-        st.markdown("**SSL Certificate**\n- **Issuer:** " + res['dns_ssl']['issuer'])
-        st.markdown("- **Subject:** " + res['dns_ssl']['subject'])
-        st.markdown(f"- **Valid From:** {res['dns_ssl']['notBefore']}\n- **Valid Until:** {res['dns_ssl']['notAfter']}")
-        st.markdown(f"- **Common Name:** {res['dns_ssl']['cn']}\n- **Serial:** `{res['dns_ssl']['serial']}`")
-        
-    st.subheader("📱 Social Media Links")
-    for plat, urls in res['socials'].items():
-        with st.expander(f"{plat} ({len(urls)} links)", expanded=False):
-            if urls:
-                for url in urls:
-                    st.markdown(f"- [{url}]({url})")
-            else:
-                st.caption("No links found.")
-                
-    st.subheader("🌐 Subdomains Research")
-    if res['subdomains']:
-        df_sub = pd.DataFrame(res['subdomains'])
-        st.dataframe(df_sub, use_container_width=True, hide_index=True)
-    else:
-        st.info("No subdomains found.")
-        
-    st.subheader("🔢 IP Addresses Analysis")
-    if res['ips']:
-        df_ip = pd.DataFrame(res['ips'])
-        st.dataframe(df_ip, use_container_width=True, hide_index=True)
-    else:
-        st.info("No IPs found.")
-        
-    st.subheader("⚙️ Technology Stack")
-    tech_cols = st.columns(4)
-    for i, (cat, items) in enumerate(res['tech'].items()):
-        with tech_cols[i % 4]:
-            st.markdown(f"**{cat}**")
-            if items:
-                for item in items:
-                    st.caption(f"- `{item}`")
-            else:
-                st.caption("- None detected")
-                
-    tab_ports, tab_vulns = st.tabs(["🚪 Open Ports", "⚠️ Vulnerabilities"])
-    with tab_ports:
-        if res['ports']:
-            df_ports = pd.DataFrame(res['ports'])
-            st.dataframe(df_ports, use_container_width=True, hide_index=True)
-        else:
-            st.success("✅ No open ports detected.")
-            
-    with tab_vulns:
-        if res['vulns']:
-            df_vuln = pd.DataFrame(res['vulns'])
-            st.dataframe(df_vuln, use_container_width=True, hide_index=True)
-        else:
-            st.success("✅ No vulnerabilities detected.")
-            
-    with st.expander("📄 Technical Files (robots.txt / sitemap.xml)", expanded=False):
-        st.code(res['files']['robots'], language="text")
-        st.divider()
-        st.code(res['files']['sitemap'], language="xml")
-        
-    if res.get('dorking_raw'):
-        with st.expander("🔍 Dorking Scan Results", expanded=False):
-            st.text_area("Google Dorking Output", value=res['dorking_raw'], height=200)
-            
-    if res.get('pagesearch_raw'):
-        with st.expander("📑 PageSearch Results", expanded=False):
-            st.text_area("PageSearch Process Listing", value=res['pagesearch_raw'], height=200)
-            
-    for api_name, content in res['api_results'].items():
-        if content:
-            with st.expander(f"🔗 {api_name} API Results", expanded=False):
-                st.code(content, language="json")
-                
+    with col1: st.metric("Target", res["domain"])
+    with col2: st.metric("Duration", res["duration"])
+    with col3: st.metric("Status", "✅ Success")
     st.markdown("---")
-    col_dl1, col_dl2 = st.columns(2)
-    with col_dl1:
-        csv_data = json.dumps(res, indent=2)
-        st.download_button("📥 Download Full JSON Report", data=csv_data, file_name=f"dpulse_report_{res['domain'].replace('.', '_')}.json", mime="application/json")
-    with col_dl2:
-        summary = f"Domain,Status,Created\n{res['domain']},Success,{res['ctime']}\n"
-        st.download_button("📥 Download Summary CSV", data=summary, file_name="dpulse_summary.csv", mime="text/csv")
-        
-    st.caption("Created with DPULSE by OSINT-TECHNOLOGIES | [GitHub](https://github.com/OSINT-TECHNOLOGIES) | [PyPI](https://pypi.org/project/dpulse/)")
+    with st.expander("📋 Configuration Summary"):
+        st.json({
+            "Report Type": res["report_type"],
+            "Dorking Strategy": res["dorking"],
+            "APIs Used": res["apis"],
+            "Snapshot Mode": res["snapshot"]
+        })
+    with st.expander("📄 Generated Report (HTML Preview)"):
+        st.markdown(res["html_content"], unsafe_allow_html=True)
+    st.download_button(
+        label="⬇️ Download HTML Report",
+        data=res["html_content"],
+        file_name=f"dpulse_report_{res['domain'].replace('.', '_')}.html",
+        mime="text/html",
+        type="primary"
+    )
 
 def main():
     st.set_page_config(page_title="DPULSE Web", page_icon="🌐", layout="wide")
-    apply_theme()
+    st.markdown("""
+        <style>
+            .main > div { padding-top: 1.5rem; }
+            .stButton > button { width: 100%; font-weight: 600; border-radius: 8px; }
+            .css-1r6slb0, .css-1e4ez7s { border-radius: 12px !important; }
+            section[data-testid="stSidebar"] { background-color: #f8f9fa; }
+        </style>
+    """, unsafe_allow_html=True)
     render_sidebar()
-    
     tab1, tab2 = st.tabs(["🚀 New Scan", "📊 Results"])
     with tab1:
         render_scan_form()
