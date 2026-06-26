@@ -460,7 +460,7 @@ def bootstrap():
 
 def run():
     with st.container():
-        cli.welcome_menu()
+        #cli.welcome_menu()
 
         col1, col2 = st.columns(7)
 
