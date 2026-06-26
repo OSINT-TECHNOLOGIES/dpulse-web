@@ -1,21 +1,46 @@
 import sys
 import os
-from datetime import datetime
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional, List
 import re
-import time
+import shutil
 import webbrowser
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from time import perf_counter
+from typing import Callable, Dict, List, Optional
+from colorama import Fore, Style
+from rich.console import Console
 import streamlit as st
 
-def setup_paths():
-    base = os.path.dirname(os.path.abspath(__file__))
-    sys.path.extend([base, f"{base}/service", f"{base}/pagesearch", 
-                     f"{base}/dorking", f"{base}/snapshotting"])
+sys.path.append('datagather_modules')
+sys.path.append('service')
+sys.path.append('reporting_modules')
+sys.path.append('dorking')
+sys.path.append('apis')
+sys.path.append('snapshotting')
+
+from config_processing import create_config, check_cfg_presence, read_config, print_and_return_config
+import db_processing as db
+import cli_init
+from dorking_handler import dorks_files_check
+from data_assembler import DataProcessing
+from logs_processing import logging
+from db_creator import get_columns_amount, manage_dorks
+from misc import domain_precheck, time_processing
+
+console = Console()
+BASE_DIR = Path(__file__).resolve().parent
+CONFIG_PATH = BASE_DIR / 'service' / 'config.ini'
+DORKING_DIR = BASE_DIR / 'dorking'
+APIS_DIR = BASE_DIR / 'apis'
+
+data_processing = DataProcessing()
+cli = cli_init.Menu()
+
 
 class ReportType(str, Enum):
     HTML = "html"
+
 
 class SnapshotMode(str, Enum):
     NONE = "n"
@@ -23,309 +48,439 @@ class SnapshotMode(str, Enum):
     PAGE_COPY = "p"
     WAYBACK = "w"
 
+
 @dataclass
-class ScanConfig:
-    domain: str = ""
-    url: str = ""
-    comment: str = ""
-    report_type: ReportType = ReportType.HTML
-    page_search: bool = False
-    keywords: List[str] = field(default_factory=list)
-    dorking_mode: str = "n"
-    api_ids: List[str] = field(default_factory=lambda: ["Empty"])
-    snapshot_mode: SnapshotMode = SnapshotMode.NONE
+class ScanOptions:
+    short_domain: str
+    url: str
+    case_comment: str
+    report_type: ReportType
+    page_search: bool
+    keywords: Optional[List[str]]
+    dorking_flag: str
+    used_api_ids: List[str]
+    snapshot_mode: SnapshotMode
     username: Optional[str] = None
-    wb_from: str = "N"
-    wb_to: str = "N"
+    wb_from: str = 'N'
+    wb_to: str = 'N'
+    pagesearch_ui_mark: str = "No"
+    snapshotting_ui_mark: str = "No"
 
-if "config" not in st.session_state:
-    st.session_state.config = ScanConfig()
-if "scan_result" not in st.session_state:
-    st.session_state.scan_result = None
-if "is_scanning" not in st.session_state:
-    st.session_state.is_scanning = False
 
-def validate_domain(domain: str) -> bool:
+def parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"y", "yes", "да", "si", "1", "true", "t"}
+
+
+def is_valid_domain(domain: str) -> bool:
     pattern = r"^(?!-)(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$"
     return bool(re.match(pattern, domain))
 
-def compute_dork_mark(mode: str) -> str:
-    if mode == "n": return "No dorking"
-    if mode.startswith("custom+"): return f"Custom ({mode.split('+')[1]})"
-    mapping = {"basic": "Basic", "iot": "IoT", "files": "Files", "admins": "Admins", "web": "Web"}
-    return mapping.get(mode, "Unknown")
 
-def perform_real_scan(cfg: ScanConfig) -> dict:
-    setup_paths() 
-    
-    short_domain = cfg.domain.replace(".", "")
-    url = f"http://{cfg.domain}/"
-    
-    pagesearch_flag = "y" if cfg.page_search else "n"
-    keywords_str = ",".join(cfg.keywords) if cfg.keywords else ""
-    dorking_flag = cfg.dorking_mode.lower()
-    used_api_flag = [x.strip() for x in cfg.api_ids] if cfg.api_ids[0] != "Empty" else ["Empty"]
-    snapshotting_flag = cfg.snapshot_mode.value
-    
-    dp = DataProcessing()
-    data_array, report_info_array = dp.data_gathering(
-        short_domain=short_domain, url=url, report_file_type="html",
-        pagesearch_flag=pagesearch_flag, keywords=keywords_str, keywords_flag="",
-        dorking_flag=dorking_flag, used_api_flag=used_api_flag,
-        snapshotting_flag=snapshotting_flag, username=cfg.username,
-        from_date=cfg.wb_from if cfg.snapshot_mode == SnapshotMode.WAYBACK else "N",
-        end_date=cfg.wb_to if cfg.snapshot_mode == SnapshotMode.WAYBACK else "N"
-    )
+def validate_yyyymmdd(s: str) -> bool:
+    return bool(re.fullmatch(r"\d{8}", s))
 
-    ip = data_array[0]
-    res = data_array[1]
-    mails = data_array[2]
-    subdomains = data_array[3]
-    subdomains_amount = data_array[4]
-    social_medias = data_array[5]
-    subdomain_mails = data_array[6]
-    subdomain_ip = data_array[8]
-    issuer = data_array[9]
-    subject = data_array[10]
-    notBefore = data_array[11]
-    notAfter = data_array[12]
-    commonName = data_array[13]
-    serialNumber = data_array[14]
-    mx_records = data_array[15]
-    robots_txt_result = data_array[16]
-    sitemap_xml_result = data_array[17]
-    sitemap_links_status = data_array[18]
-    web_servers = data_array[19]
-    cms = data_array[20]
-    programming_languages = data_array[21]
-    web_frameworks = data_array[22]
-    analytics = data_array[23]
-    javascript_frameworks = data_array[24]
-    ports = data_array[25]
-    hostnames = data_array[26]
-    cpes = data_array[27]
-    tags = data_array[28]
-    vulns = data_array[29]
-    common_socials = data_array[30]
-    total_socials = data_array[31]
-    ps_emails_return = data_array[32]
-    accessible_subdomains = data_array[33]
-    emails_amount = data_array[34]
-    files_counter = data_array[35]
-    cookies_counter = data_array[36]
-    api_keys_counter = data_array[37]
-    website_elements_counter = data_array[38]
-    exposed_passwords_counter = data_array[39]
-    total_links_counter = data_array[40]
-    accessed_links_counter = data_array[41]
-    keywords_messages_list = data_array[42]
-    dorking_status = data_array[43]
-    dorking_file_path = data_array[44]
-    virustotal_output = data_array[45]
-    securitytrails_output = data_array[46]
-    hudsonrock_output = data_array[47]
-    ps_string = data_array[48]
-    total_ports = data_array[49]
-    total_ips = data_array[50]
-    total_vulns = data_array[51]
 
-    casename = report_info_array[0]
-    db_casename = report_info_array[1]
-    db_creation_date = report_info_array[2]
-    report_folder = report_info_array[3]
-    ctime = report_info_array[4]
-    report_file_type = report_info_array[5]
-    report_ctime = report_info_array[6]
-    api_scan_db = report_info_array[7]
-    used_api_flag_out = report_info_array[8]
+def sanitize_db_filename(name: str) -> str:
+    safe = os.path.basename(name).split('.')[0]
+    if not re.fullmatch(r"[a-zA-Z0-9_\-]{1,50}", safe):
+        raise ValueError("Invalid DB name")
+    return safe
 
-    from jinja2 import Environment, FileSystemLoader
-    env = Environment(loader=FileSystemLoader('.'))
-    template_path = 'service//pdf_report_templates//modern_report_template.html'
+
+def compute_dorking_ui_mark(dorking_flag: str) -> str:
     try:
-        template = env.get_template(template_path)
-        html_output = template.render({
-            "sh_domain": short_domain, "full_url": url, "ip_address": ip,
-            "registrar": res["registrar"], "creation_date": res["creation_date"],
-            "expiration_date": res["expiration_date"], "name_servers": ", ".join(res["name_servers"]),
-            "org": res["org"], "mails": mails, "subdomain_mails": subdomain_mails,
-            "subdomain_socials": social_medias, "subdomain_ip": subdomain_ip,
-            "subdomains": subdomains, "fb_links": common_socials.get("Facebook", []),
-            "tw_links": common_socials.get("Twitter", []), "inst_links": common_socials.get("Instagram", []),
-            "tg_links": common_socials.get("Telegram", []), "tt_links": common_socials.get("TikTok", []),
-            "li_links": common_socials.get("LinkedIn", []), "vk_links": common_socials.get("VKontakte", []),
-            "yt_links": common_socials.get("YouTube", []), "wc_links": common_socials.get("WeChat", []),
-            "ok_links": common_socials.get("Odnoklassniki", []), "xcom_links": common_socials.get("X.com", []),
-            "robots_txt_result": robots_txt_result, "sitemap_xml_result": sitemap_xml_result,
-            "sitemap_links": sitemap_links_status, "web_servers": web_servers, "cms": cms,
-            "programming_languages": programming_languages, "ip_addresses": list(subdomain_ip) + [ip],
-            "javascript_frameworks": javascript_frameworks, "ctime": report_ctime,
-            "a_tsf": subdomains_amount, "mx_records": mx_records, "issuer": issuer,
-            "subject": subject, "notBefore": notBefore, "notAfter": notAfter,
-            "commonName": commonName, "serialNumber": serialNumber, "ports": ports,
-            "hostnames": hostnames, "cpes": cpes, "tags": tags, "vulns": vulns,
-            "a_tsm": total_socials, "pagesearch_ui_mark": pagesearch_flag == "y",
-            "dorking_status": dorking_status,
-            "add_dsi": "", "ps_s": accessible_subdomains, "ps_e": emails_amount,
-            "ps_f": files_counter, "ps_c": cookies_counter, "ps_a": api_keys_counter,
-            "ps_w": website_elements_counter, "ps_p": exposed_passwords_counter,
-            "ss_l": total_links_counter, "ss_a": accessed_links_counter,
-            "hudsonrock_output": hudsonrock_output, "snapshotting_ui_mark": snapshotting_flag in ['s','p','w'],
-            "virustotal_output": virustotal_output, "securitytrails_output": securitytrails_output,
-            "ps_string": ps_string, "a_tops": total_ports, "a_temails": len(mails),
-            "a_tips": total_ips, "a_tpv": total_vulns,
-            "robots_content": "", "sitemap_xml_content": "", "sitemap_txt_content": ""
-        })
+        if dorking_flag == 'n':
+            return 'No'
+        if dorking_flag.startswith('custom+'):
+            db_name = dorking_flag.split('+', 1)[1]
+            rc = get_columns_amount(str(DORKING_DIR / db_name), 'dorks')
+            return f'Yes, Custom table dorking ({rc} dorks)'
+
+        mapping = {
+            'basic': 'basic_dorking.db',
+            'iot': 'iot_dorking.db',
+            'files': 'files_dorking.db',
+            'admins': 'adminpanels_dorking.db',
+            'web': 'webstructure_dorking.db'
+        }
+        if dorking_flag in mapping:
+            db_name = mapping[dorking_flag]
+            table = f'{dorking_flag}_dorks'
+            rc = get_columns_amount(str(DORKING_DIR / db_name), table)
+            return f'Yes, {dorking_flag} dorking ({rc} dorks)'
     except Exception as e:
-        html_output = f"<div style='color:red;padding:20px;'>Template error: {e}</div>"
+        logging.error("Failed to compute dorking UI mark: %s", e, exc_info=True)
+        return 'Dorking info unavailable'
+    return 'No'
 
-    return {
-        "status": "success",
-        "domain": cfg.domain,
-        "report_type": cfg.report_type.value.upper(),
-        "dorking": compute_dork_mark(cfg.dorking_mode),
-        "apis": ", ".join(used_api_flag_out) if used_api_flag_out[0] != "Empty" else "None",
-        "snapshot": cfg.snapshot_mode.value,
-        "duration": "~2.5s",
-        "html_content": html_output
-    }
 
-def render_sidebar():
-    st.sidebar.title("⚙️ Global Settings")
-    with st.sidebar.expander("🔑 API Keys", expanded=False):
-        st.text_input("Primary Key", type="password", key="api_key_1", placeholder="sk-...")
-        st.text_input("Secondary Key", type="password", key="api_key_2", placeholder="sk-...")
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🔄 Reset Configuration"):
-        st.session_state.config = ScanConfig()
-        st.session_state.scan_result = None
-        st.rerun()
+def process_report(options: ScanOptions):
+    import html_report_creation as html_rc
+    with console.status("[magenta]Processing scan...[/magenta]", spinner="dots"):
+        start = perf_counter()
+        pagesearch_flag_str = 'y' if options.page_search else 'n'
+        keywords_flag = 1 if (options.page_search and options.keywords and len(options.keywords) > 0) else 0
+        keywords_payload = options.keywords if options.page_search else ''
 
-def render_scan_form():
-    st.header("🚀 New Scan Configuration")
-    st.caption("Configure target, dorking strategy, APIs and snapshots. All data stays in session.")
-    with st.form("scan_form", clear_on_submit=False):
+        data_array, report_info_array = data_processing.data_gathering(
+            options.short_domain,
+            options.url,
+            options.report_type.value,
+            pagesearch_flag_str,
+            keywords_payload,
+            keywords_flag,
+            options.dorking_flag,
+            options.used_api_ids if options.used_api_ids else ['Empty'],
+            options.snapshot_mode.value,
+            options.username,
+            options.wb_from,
+            options.wb_to
+        )
+        end_time_str = time_processing(perf_counter() - start)
+
+    if options.report_type == ReportType.HTML:
+        html_rc.report_assembling(
+            options.short_domain, options.url, options.case_comment,
+            data_array, report_info_array,
+            options.pagesearch_ui_mark, end_time_str, options.snapshotting_ui_mark
+        )
+
+
+def handle_scan():
+    with st.container(border=True):
         col1, col2 = st.columns(2)
-        with col1:
-            domain = st.text_input(
-                "Target Domain",
-                value=st.session_state.config.domain,
-                help="e.g., example.com (no http/https)"
-            )
-            comment = st.text_input("Case Comment / Internal Note", value=st.session_state.config.comment)
-        with col2:
-            report_type = st.selectbox(
-                "Report Format",
-                [rt.value for rt in ReportType],
-                index=0,
-                help="Currently only HTML is supported"
-            )
-            page_search = st.checkbox("Enable Page Search", value=st.session_state.config.page_search)
-        if page_search:
-            keywords_str = st.text_input(
-                "Keywords (comma-separated)",
-                placeholder="login, admin, dashboard, api",
-                help="Leave empty to search all pages"
-            )
-            st.session_state.config.keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
-        dorking_mode = st.selectbox(
-            "Dorking Strategy",
-            ["None", "Basic", "IoT", "Files", "Admins", "Web", "Custom"],
-            index=["n", "basic", "iot", "files", "admins", "web", "custom"].index(
-                st.session_state.config.dorking_mode) if st.session_state.config.dorking_mode != "n" else 0,
-            help="Select predefined or custom dork sets"
-        )
-        col3, col4 = st.columns(2)
-        with col3:
-            use_api = st.checkbox("Use External APIs", value=st.session_state.config.api_ids[0] != "Empty")
-            api_input = ""
-            username = None
-            if use_api:
-                api_input = st.text_input("API IDs (comma-separated)", placeholder="1, 3",
-                                          help="Check your API manager for valid IDs")
-                if '3' in api_input.split(","):
-                    username = st.text_input("Known Username from domain (optional)")
-        with col4:
-            snap_mode = st.selectbox(
-                "Snapshot Mode",
-                ["None", "Screenshot", "Page Copy", "Wayback Machine"],
-                index=["n", "s", "p", "w"].index(
-                    st.session_state.config.snapshot_mode.value) if st.session_state.config.snapshot_mode != SnapshotMode.NONE else 0,
-                help="Capture visual or HTML state of the target"
-            )
-            wb_from, wb_to = "", ""
-            if snap_mode == "Wayback Machine":
-                col_w1, col_w2 = st.columns(2)
-                with col_w1: wb_from = st.text_input("Start (YYYYMMDD)")
-                with col_w2: wb_to = st.text_input("End (YYYYMMDD)")
-        submitted = st.form_submit_button("▶️ Start Scan", type="primary")
-    if submitted:
-        if not domain or not validate_domain(domain):
-            st.error("❌ Invalid domain format. Please enter a valid domain without protocol.")
-            return
-        cfg = ScanConfig(
-            domain=domain, url=f"http://{domain}/", comment=comment,
-            report_type=ReportType(report_type), page_search=page_search,
-            keywords=st.session_state.config.keywords, dorking_mode=dorking_mode.lower(),
-            api_ids=[x.strip() for x in api_input.split(",") if x.strip().isdigit()] if use_api and api_input else [
-                "Empty"],
-            snapshot_mode=SnapshotMode(snap_mode[0].lower()), username=username,
-            wb_from=wb_from or "N", wb_to=wb_to or "N"
-        )
-        st.session_state.config = cfg
-        with st.spinner("🔍 Scanning target and gathering data..."):
-            try:
-                result = perform_real_scan(cfg)
-                st.session_state.scan_result = result
-                st.success(f"✅ Scan completed successfully for `{cfg.domain}`!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ Scan failed: {e}")
 
-def render_results():
-    if not st.session_state.scan_result:
-        st.info("👈 Configure and run a scan to see results here.")
-        return
-    res = st.session_state.scan_result
-    st.header("📊 Scan Results")
-    col1, col2, col3 = st.columns(3)
-    with col1: st.metric("Target", res["domain"])
-    with col2: st.metric("Duration", res["duration"])
-    with col3: st.metric("Status", "✅ Success")
-    st.markdown("---")
-    with st.expander("📋 Configuration Summary"):
-        st.json({
-            "Report Type": res["report_type"],
-            "Dorking Strategy": res["dorking"],
-            "APIs Used": res["apis"],
-            "Snapshot Mode": res["snapshot"]
-        })
-    with st.expander("📄 Generated Report (HTML Preview)"):
-        st.markdown(res["html_content"], unsafe_allow_html=True)
-    st.download_button(
-        label="⬇️ Download HTML Report",
-        data=res["html_content"],
-        file_name=f"dpulse_report_{res['domain'].replace('.', '_')}.html",
-        mime="text/html",
-        type="primary"
-    )
+        with col1:
+            short_domain = st.text_input("Target domain name", placeholder="example.com")
+
+            if not short_domain or not is_valid_domain(short_domain):
+                st.error("Please enter a valid domain name (e.g., example.com)")
+                return
+
+            url = f"http://{short_domain}/"
+            st.info(f"Pinging {url}...")
+
+            if domain_precheck(short_domain):
+                st.success("Domain is accessible. Proceeding with scan.")
+            else:
+                st.error("Domain is not accessible. Scan cannot proceed.")
+                return
+
+        with col2:
+            case_comment = st.text_area("Case comment", height=100)
+
+            page_search = st.checkbox("Use PageSearch function?", value=False)
+
+            if page_search:
+                keywords_input = st.text_input("Keywords (comma-separated)", placeholder="keyword1, keyword2")
+                if keywords_input.strip():
+                    keywords_list = [k.strip() for k in keywords_input.split(',') if k.strip()]
+                    if not keywords_list:
+                        st.error("This field must contain at least one keyword")
+                        return
+                    keywords = keywords_list
+                    pagesearch_ui_mark = f'Yes, with {keywords_list} keywords search'
+                else:
+                    keywords = None
+                    pagesearch_ui_mark = 'Yes, without keywords search'
+            else:
+                keywords = None
+                pagesearch_ui_mark = 'No'
+
+        dorking_raw = st.selectbox(
+            "Dorking mode",
+            ["Basic", "IoT", "Files", "Admins", "Web", "Custom", "N"]
+        )
+
+        if dorking_raw == "Custom":
+            custom_db_name = st.text_input("Enter your custom Dorking DB name (no extension)")
+            try:
+                sanitize_db_filename(custom_db_name)
+            except ValueError as e:
+                st.error(str(e))
+                return
+            dorking_flag = f'custom+{custom_db_name}.db'
+        elif dorking_raw == "N":
+            dorking_flag = 'n'
+        else:
+            dorking_flag = dorking_raw.lower()
+
+        api_yes = st.checkbox("Use 3rd party API in scan?", value=False)
+
+        used_api_ids: List[str] = ['Empty']
+        username: Optional[str] = None
+        used_api_ui = 'No'
+
+        if api_yes:
+            db.select_api_keys('printing')
+            st.info("⚠️ APIs with red-colored API Key field are unable to use!")
+
+            to_use_api_flag = st.text_input(
+                "Select APIs IDs (comma-separated)",
+                placeholder="1,2,3"
+            )
+            used_api_ids = [item.strip() for item in to_use_api_flag.split(',') if item.strip().isdigit()]
+
+            if not used_api_ids:
+                st.error("No valid API IDs selected")
+                return
+
+            if '3' in used_api_ids:
+                u = st.text_input("Username from this domain (or leave empty)", placeholder="username")
+                username = None if not u else u
+
+            if db.check_api_keys(used_api_ids):
+                st.success('Found API key. Continuation')
+            else:
+                st.error("API key was not found. Check if you've entered valid API key in API Keys DB")
+                return
+
+            used_api_ui = f'Yes, using APIs with following IDs: {", ".join(used_api_ids)}'
+
+        snap_choice = st.selectbox(
+            "Snapshotting mode",
+            ["S(creenshot)", "P(age Copy)", "W(ayback Machine)", "N"]
+        )
+
+        snapshotting_ui_mark = 'No'
+        from_date = end_date = 'N'
+
+        if snap_choice == "S(creenshot)":
+            snapshotting_ui_mark = "Yes, domain's main page snapshotting as a screenshot"
+        elif snap_choice == "P(age Copy)":
+            snapshotting_ui_mark = "Yes, domain's main page snapshotting as a .HTML file"
+        elif snap_choice == "W(ayback Machine)":
+            from_date = st.text_input('Start date (YYYYMMDD format)', placeholder="20230101")
+            end_date = st.text_input('End date (YYYYMMDD format)', placeholder="20241231")
+            if not (validate_yyyymmdd(from_date) and validate_yyyymmdd(end_date)):
+                st.error("Invalid date format. Use YYYYMMDD.")
+                return
+            snapshotting_ui_mark = "Yes, domain's main page snapshotting using Wayback Machine"
+
+        dorking_ui_mark = compute_dorking_ui_mark(dorking_flag)
+
+        cli_init.print_prescan_summary(
+            short_domain, report_type.value.upper(), pagesearch_ui_mark,
+            dorking_ui_mark, used_api_ui, case_comment, snapshotting_ui_mark
+        )
+
+        options = ScanOptions(
+            short_domain=short_domain,
+            url=url,
+            case_comment=case_comment,
+            report_type=report_type,
+            page_search=page_search,
+            keywords=keywords,
+            dorking_flag=dorking_flag,
+            used_api_ids=used_api_ids,
+            snapshot_mode=snap_choice.lower(),
+            username=username,
+            wb_from=from_date,
+            wb_to=end_date,
+            pagesearch_ui_mark=pagesearch_ui_mark,
+            snapshotting_ui_mark=snapshotting_ui_mark,
+        )
+
+        try:
+            process_report(options)
+        except Exception as e:
+            st.error("Error appeared during report processing. See journal for details")
+            logging.error("PROCESS REPORT ERROR: %s", e, exc_info=True)
+
+
+def handle_settings():
+    with st.container(border=True):
+        config = print_and_return_config()
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            section = st.selectbox("\nEnter the section you want to update", list(config.sections()))
+
+            options = [opt for opt in config.options(section)]
+            option = st.selectbox("Enter the option you want to update", options)
+
+            value = st.text_input("Enter the new value")
+
+        with col2:
+            if st.button("Update Configuration"):
+                config.set(section.upper(), option, value)
+                with open(CONFIG_PATH, 'w') as configfile:
+                    config.write(configfile)
+                st.success("\nConfiguration updated successfully")
+
+
+def handle_dorking_db():
+    cli.dorking_db_manager()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("Create Custom Dorking DB"):
+            try:
+                ddb_name = sanitize_db_filename(st.text_input("Enter a name for your custom Dorking DB (no extension)"))
+            except ValueError as e:
+                st.error(str(e))
+                return
+            manage_dorks(ddb_name)
+
+
+def handle_db_menu():
+    with st.container(border=True):
+        rsdb_presence = db.check_rsdb_presence('report_storage.db')
+
+        if rsdb_presence:
+            st.success("Report storage database presence: OK")
+        else:
+            db.db_creation('report_storage.db')
+            st.success("Successfully created report storage database")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            choice_db = st.selectbox("\nDatabase actions", ["Select reports", "Close connection"])
+
+            if choice_db == "Select reports":
+                cursor, sqlite_connection, data_presence_flag = db.db_select()
+
+                if data_presence_flag:
+                    id_to_extract_raw = st.text_input("Enter report ID to extract")
+
+                    if id_to_extract_raw.isdigit():
+                        id_to_extract = int(id_to_extract_raw)
+                        extracted_folder_name = f'report_recreated_ID#{id_to_extract}'
+
+                        try:
+                            os.makedirs(extracted_folder_name)
+                            db.db_report_recreate(extracted_folder_name, id_to_extract)
+                            st.success(f"Report {id_to_extract} recreated in folder '{extracted_folder_name}'")
+                        except FileExistsError:
+                            st.error("Report with the same recreated folder already exists. Please check its content or delete it and try again")
+                        except Exception as e:
+                            st.error("Error appeared when trying to recreate report from DB. See journal for details")
+                            logging.error("REPORT RECREATE ERROR: %s", e, exc_info=True)
+
+        with col2:
+            if st.button("Close connection"):
+                db.db_select()
+                st.success("\nDatabase connection is successfully closed")
+
+
+def handle_docs():
+    st.link_button("📚 Documentation", "https://dpulse.readthedocs.io/en/latest/")
+
+
+def handle_api_manager():
+    cli.api_manager()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("Update API Key"):
+            cursor, conn = db.select_api_keys('updating')
+
+            api_id_to_update = st.text_input("\nEnter API's ID to update its key")
+            new_api_key = st.text_input("Enter new API key")
+
+            try:
+                cursor.execute("UPDATE api_keys SET api_key = ? WHERE id = ?", (new_api_key, api_id_to_update))
+                conn.commit()
+                st.success("\nSuccessfully added new API key")
+            except Exception as e:
+                st.error("Something went wrong when adding new API key. See journal for details")
+                logging.error('API KEY ADDING: ERROR. REASON: %s', e, exc_info=True)
+
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    with col2:
+        if st.button("Reset API Keys DB"):
+            try:
+                (APIS_DIR / 'api_keys.db').unlink(missing_ok=True)
+                st.success("Deleted old API Keys DB")
+            except Exception as e:
+                st.error("Failed to delete old API Keys DB")
+                logging.error("DELETE API DB ERROR: %s", e, exc_info=True)
+
+            try:
+                shutil.copyfile(APIS_DIR / 'api_keys_reference.db', APIS_DIR / 'api_keys.db')
+                st.success("Successfully restored reference API Keys DB")
+            except FileNotFoundError:
+                st.error("Reference API Keys DB was not found")
+            except Exception as e:
+                st.error("Failed to restore API Keys DB")
+                logging.error("RESTORE API DB ERROR: %s", e, exc_info=True)
+
+
+def handle_exit():
+    st.warning("Exiting the program.")
+    raise SystemExit
+
+
+HANDLERS: Dict[str, Callable[[], None]] = {
+    "1": handle_scan,
+    "2": handle_settings,
+    "3": handle_dorking_db,
+    "4": handle_db_menu,
+    "5": handle_api_manager,
+    "6": handle_docs,
+    "7": handle_exit,
+}
+
+
+def bootstrap():
+    cfg_presence = check_cfg_presence()
+
+    if cfg_presence:
+        st.success("Global config file presence: OK")
+    else:
+        st.warning("Global config file presence: NOT OK")
+        create_config()
+        st.success("Successfully generated global config file")
+
+    rsdb_presence = db.check_rsdb_presence('report_storage.db')
+
+    if rsdb_presence:
+        st.success("Report storage database presence: OK")
+    else:
+        db.db_creation('report_storage.db')
+        st.success("Successfully created report storage database")
+
+    dorks_files_check()
+
+    try:
+        _ = read_config()
+        print('')
+    except Exception as e:
+        logging.error("CONFIG READ ERROR: %s", e, exc_info=True)
+        st.error("Failed to read config. See journal for details")
+
+
+def run():
+    with st.container():
+        cli.welcome_menu()
+
+        col1, col2 = st.columns(7)
+
+        HANDLERS["1"] = handle_scan
+        HANDLERS["2"] = handle_settings
+        HANDLERS["3"] = handle_dorking_db
+        HANDLERS["4"] = handle_db_menu
+        HANDLERS["5"] = handle_api_manager
+        HANDLERS["6"] = handle_docs
+        HANDLERS["7"] = handle_exit
+
+        for i, handler in HANDLERS.items():
+            with col1:
+                st.button(f"{i}", on_click=handler)
+
 
 def main():
-    st.set_page_config(page_title="DPULSE Web", page_icon="🌐", layout="wide")
-    st.markdown("""
-        <style>
-            .main > div { padding-top: 1.5rem; }
-            .stButton > button { width: 100%; font-weight: 600; border-radius: 8px; }
-            .css-1r6slb0, .css-1e4ez7s { border-radius: 12px !important; }
-            section[data-testid="stSidebar"] { background-color: #f8f9fa; }
-        </style>
-    """, unsafe_allow_html=True)
-    render_sidebar()
-    tab1, tab2 = st.tabs(["🚀 New Scan", "📊 Results"])
-    with tab1:
-        render_scan_form()
-    with tab2:
-        render_results()
+    bootstrap()
+    run()
+
 
 if __name__ == "__main__":
     main()
